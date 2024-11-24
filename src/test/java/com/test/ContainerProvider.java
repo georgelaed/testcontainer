@@ -10,7 +10,6 @@ import jakarta.persistence.SharedCacheMode;
 import jakarta.persistence.ValidationMode;
 
 import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
 
 import org.testcontainers.containers.JdbcDatabaseContainer;
 import org.testcontainers.containers.MySQLContainer;
@@ -18,14 +17,16 @@ import org.testcontainers.containers.MySQLContainer;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Logger;
 
 import static jakarta.persistence.PersistenceConfiguration.JDBC_DRIVER;
 import static jakarta.persistence.PersistenceConfiguration.JDBC_PASSWORD;
 import static jakarta.persistence.PersistenceConfiguration.JDBC_URL;
 import static jakarta.persistence.PersistenceConfiguration.JDBC_USER;
 
-@Slf4j
 public class ContainerProvider implements AutoCloseable {
+
+    private static final Logger log = Logger.getLogger(ContainerProvider.class.getName());
 
     private static final JdbcDatabaseContainer<?> MYSQL = new MySQLContainer<>("mysql:lts");
     private static final JdbcDatabaseContainer<?> JDBC_DATABASE_CONTAINER = MYSQL;
@@ -53,7 +54,7 @@ public class ContainerProvider implements AutoCloseable {
             }
         }
 
-        log.debug("Got db helper instance {}!", containerProvider);
+        log.info("Got db helper instance %s!" + containerProvider);
         return containerProvider;
     }
 
@@ -68,12 +69,17 @@ public class ContainerProvider implements AutoCloseable {
 
         this.persistenceConfiguration = new PersistenceConfiguration("PU_NAME");
 
+        log.info("XXX "+ this.dbContainer.getDriverClassName());
+        log.info("XXX "+ this.dbContainer.getJdbcUrl());
+        log.info("XXX "+ this.dbContainer.getUsername());
+        log.info("XXX "+ this.dbContainer.getPassword());
+
         persistenceConfiguration.property(JDBC_DRIVER, this.dbContainer.getDriverClassName());
         persistenceConfiguration.property(JDBC_URL, this.dbContainer.getJdbcUrl());
         persistenceConfiguration.property(JDBC_USER, this.dbContainer.getUsername());
         persistenceConfiguration.property(JDBC_PASSWORD, this.dbContainer.getPassword());
 
-        //persistenceConfiguration.managedClass(Test.class);
+        persistenceConfiguration.managedClass(Person.class);
 
         persistenceConfiguration.validationMode(ValidationMode.CALLBACK);
         persistenceConfiguration.sharedCacheMode(SharedCacheMode.ALL);
@@ -85,12 +91,12 @@ public class ContainerProvider implements AutoCloseable {
     public EntityManagerFactory createNewEntityManagerFactory() throws SchemaValidationException {
         this.currentEntityManagerFactory = persistenceConfiguration.createEntityManagerFactory();
 
-        log.info("1. Created EMF: {} ", this.currentEntityManagerFactory.getName());
+        log.info("1. Created EMF: {} "+ this.currentEntityManagerFactory.getName());
 
         this.entityManagerFactories.add(this.currentEntityManagerFactory);
 
         this.currentEMFschemaManager = currentEntityManagerFactory.getSchemaManager();
-        log.info("2. Created SchemaManager: {}", this.currentEMFschemaManager.toString());
+        log.info("2. Created SchemaManager: {}"+ this.currentEMFschemaManager.toString());
 
         log.info("3. Creating database objects...");
         this.currentEMFschemaManager.create(true);
@@ -112,7 +118,7 @@ public class ContainerProvider implements AutoCloseable {
             try {
                 ((AutoCloseable)emf).close();
             } catch (Exception e) {
-                log.error("Unable to close EMF: {}", emf.getName());
+                log.severe("Unable to close EMF: {}" + emf.getName());
             }
         });
 
