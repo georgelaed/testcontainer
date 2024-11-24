@@ -2,6 +2,13 @@ package com.test;
 
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.PersistenceConfiguration;
+
+import jakarta.persistence.PersistenceUnitTransactionType;
+import jakarta.persistence.SchemaManager;
+import jakarta.persistence.SchemaValidationException;
+import jakarta.persistence.SharedCacheMode;
+import jakarta.persistence.ValidationMode;
+
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -9,8 +16,13 @@ import org.testcontainers.containers.JdbcDatabaseContainer;
 import org.testcontainers.containers.MySQLContainer;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
-import static jakarta.persistence.PersistenceConfiguration.*;
+import static jakarta.persistence.PersistenceConfiguration.JDBC_DRIVER;
+import static jakarta.persistence.PersistenceConfiguration.JDBC_PASSWORD;
+import static jakarta.persistence.PersistenceConfiguration.JDBC_URL;
+import static jakarta.persistence.PersistenceConfiguration.JDBC_USER;
 
 @Slf4j
 public class ContainerProvider implements AutoCloseable {
@@ -21,43 +33,18 @@ public class ContainerProvider implements AutoCloseable {
     private static volatile ContainerProvider containerProvider;
 
     private final JdbcDatabaseContainer<?> dbContainer;
-    @Getter private final EntityManagerFactory entityManagerFactory;
     private final PersistenceConfiguration persistenceConfiguration;
 
-    private ContainerProvider(JdbcDatabaseContainer<?> dbContainer) throws InterruptedException {
-        this.dbContainer = dbContainer;
+    @Getter private EntityManagerFactory   currentEntityManagerFactory;
+    private         SchemaManager          currentEMFschemaManager;
 
-        dbContainer.start();
-        LocalDateTime start= LocalDateTime.now();
-        while(!dbContainer.isRunning() && LocalDateTime.now().isBefore(start.plusSeconds(10))){
-            Thread.sleep(2000);
-        }
+    private List<EntityManagerFactory> entityManagerFactories = new ArrayList<>();
 
-        this.persistenceConfiguration = new PersistenceConfiguration("test");
-
-        persistenceConfiguration.property(JDBC_DRIVER, this.dbContainer.getDriverClassName());
-        persistenceConfiguration.property(JDBC_URL, this.dbContainer.getJdbcUrl());
-        persistenceConfiguration.property(JDBC_USER, this.dbContainer.getUsername());
-        persistenceConfiguration.property(JDBC_PASSWORD, this.dbContainer.getPassword());
-
-
-        System.out.println("XXX " + this.dbContainer.getDriverClassName());
-        System.out.println("XXX " + this.dbContainer.getJdbcUrl());
-        System.out.println("XXX " + this.dbContainer.getUsername());
-        System.out.println("XXX " + this.dbContainer.getPassword());
-
-        //persistenceConfiguration.managedClass(test.class);
-
-        this.entityManagerFactory = persistenceConfiguration.createEntityManagerFactory();
-
-        this.entityManagerFactory.getSchemaManager().create(true);
-    }
-
-    public static ContainerProvider getInstance() throws InterruptedException {
+    public static ContainerProvider getInstance() throws InterruptedException, SchemaValidationException {
         return getInstance(JDBC_DATABASE_CONTAINER);
     }
 
-    public static ContainerProvider getInstance(JdbcDatabaseContainer<?> dbContainer) throws InterruptedException {
+    public static ContainerProvider getInstance(JdbcDatabaseContainer<?> dbContainer) throws InterruptedException, SchemaValidationException {
         if (containerProvider == null) {
             synchronized (ContainerProvider.class) {
                 if (containerProvider == null) {
@@ -70,17 +57,67 @@ public class ContainerProvider implements AutoCloseable {
         return containerProvider;
     }
 
-    public EntityManagerFactory createNewEntityManagerFactory() {
-        return persistenceConfiguration.createEntityManagerFactory();
+    private ContainerProvider(JdbcDatabaseContainer<?> dbContainer) throws InterruptedException, SchemaValidationException {
+        this.dbContainer = dbContainer;
+
+        dbContainer.start();
+        LocalDateTime start= LocalDateTime.now();
+        while(!dbContainer.isRunning() && LocalDateTime.now().isBefore(start.plusSeconds(10))){
+            Thread.sleep(2000);
+        }
+
+        this.persistenceConfiguration = new PersistenceConfiguration("PU_NAME");
+
+        persistenceConfiguration.property(JDBC_DRIVER, this.dbContainer.getDriverClassName());
+        persistenceConfiguration.property(JDBC_URL, this.dbContainer.getJdbcUrl());
+        persistenceConfiguration.property(JDBC_USER, this.dbContainer.getUsername());
+        persistenceConfiguration.property(JDBC_PASSWORD, this.dbContainer.getPassword());
+
+        //persistenceConfiguration.managedClass(Test.class);
+
+        persistenceConfiguration.validationMode(ValidationMode.CALLBACK);
+        persistenceConfiguration.sharedCacheMode(SharedCacheMode.ALL);
+        persistenceConfiguration.transactionType(PersistenceUnitTransactionType.RESOURCE_LOCAL);
+
+        this.currentEntityManagerFactory = createNewEntityManagerFactory();
+    }
+
+    public EntityManagerFactory createNewEntityManagerFactory() throws SchemaValidationException {
+        this.currentEntityManagerFactory = persistenceConfiguration.createEntityManagerFactory();
+
+        log.info("1. Created EMF: {} ", this.currentEntityManagerFactory.getName());
+
+        this.entityManagerFactories.add(this.currentEntityManagerFactory);
+
+        this.currentEMFschemaManager = currentEntityManagerFactory.getSchemaManager();
+        log.info("2. Created SchemaManager: {}", this.currentEMFschemaManager.toString());
+
+        log.info("3. Creating database objects...");
+        this.currentEMFschemaManager.create(true);
+        log.info("4. Created database objects!");
+
+
+        log.info("5. Validating database objects...");
+        this.currentEMFschemaManager.validate();
+        log.info("6. Validated database objects!");
+
+        return this.currentEntityManagerFactory;
     }
 
     @Override
     public void close() throws Exception {
-        entityManagerFactory.getSchemaManager().truncate();
+        entityManagerFactories.forEach(emf -> emf.getSchemaManager().truncate());
 
-        ((AutoCloseable) entityManagerFactory).close();
+        entityManagerFactories.forEach(emf -> {
+            try {
+                ((AutoCloseable)emf).close();
+            } catch (Exception e) {
+                log.error("Unable to close EMF: {}", emf.getName());
+            }
+        });
+
         ((AutoCloseable) dbContainer).close();
 
-        containerProvider= null;
+        containerProvider = null;
     }
 }
